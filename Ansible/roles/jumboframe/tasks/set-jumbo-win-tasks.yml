@@ -10,7 +10,7 @@
 
 - name: Get-Interface-Tmp
   win_shell: |
-    powershell -command "((Get-Content C:\users\cmschef\ip.txt| Select-String -Pattern {{ lpvr1.ansible_facts.interfaceIP }} -Context 4|findstr InterfaceAlias).Split(': ')| findstr Ethernet)"
+    powershell -command "((Get-Content C:\users\ip.txt| Select-String -Pattern {{ lpvr1.ansible_facts.interfaceIP }} -Context 4|findstr InterfaceAlias).Split(': ')| findstr Ethernet)"
   register: GetInterfaceTmp
 
 
