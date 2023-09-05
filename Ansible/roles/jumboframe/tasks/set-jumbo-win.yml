@@ -1,7 +1,7 @@
 ---
 - name: Set-Variable-For-Windows-File
   set_fact:
-    outfile: C:\users\cmschef\ip.txt
+    outfile: C:\users\ip.txt
 
 
 - name: Get-Ip-List
@@ -13,7 +13,7 @@
   set_fact:
     interfaceIP: "{{ element.ipConfig.ip }}"
     interfaceMTU: "{{ element.ipConfig.mtuSize }}"
-  loop: "{{ cmsng.networkInterfaces }}"
+  loop: "{{ networkInterfaces }}"
   vars:
     element: "{{ item }}"
   register: interface_facts
