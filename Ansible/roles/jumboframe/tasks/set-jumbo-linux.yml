@@ -5,7 +5,7 @@
   set_fact:
     interfaceIP: "{{ element.ipConfig.ip }}"
     interfaceMTU: "{{ element.ipConfig.mtuSize }}"
-  loop: "{{ cmsng.networkInterfaces }}"
+  loop: "{{ networkInterfaces }}"
   vars:
     element: "{{ item }}"
   register: interface_facts
