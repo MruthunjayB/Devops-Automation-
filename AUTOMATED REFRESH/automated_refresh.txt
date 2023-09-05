@@ -1,0 +1,209 @@
+#!/bin/ksh
+################################################################################################
+#PROGRAM        : Database_Refresh
+#
+#Purpose        : Performs the below tasks for the Target ORACLE_SID which is under Refresh
+#                       Collects Prerefresh snapshots for Target Database
+#                       Target Database Refresh via Active Cloning Method
+#                       Performs Post Refresh for Target Database
+#
+#Author         : Mruthunjay Belavatagi
+#
+################################################################################################
+#############################################################################################
+#Env_Src
+#
+#############################################################################################
+Env_Src ()
+{
+cd /u002/app/${OSUSR}/local/cordba/scripts/config
+STATUS=$?
+if [[ ${STATUS} -ne 0 ]]
+then
+    print "ERROR: Could not find Directory /u002/app/${OSUSR}/local/cordba/scripts/config"
+    exit 1
+fi
+. /u002/app/${OSUSR}/local/cordba/scripts/config/${ORACLE_SID}.oraenv
+STATUS=$?
+if [[ ${STATUS} -ne 0 ]]
+then
+    print "ERROR: Unable to Source config file for database ${SID}"
+    exit 1
+fi
+print "ORACLE_HOME for ${ORACLE_SID} is ${ORACLE_HOME}"
+GET_DB_STATUS=`sqlplus -s " / as sysdba"<< EOF
+set feedback off pause off pagesize 0 heading off verify off linesize 500 term off
+select OPEN_MODE FROM V\\\$DATABASE
+/
+exit
+/
+EOF`
+if [[ ${GET_DB_STATUS} != "READ WRITE" ]]
+ then 
+     print "ERROR : Target SID Not in open state"
+     exit 1
+fi
+}
+#############################################################################################
+#Pre_Tasks
+#
+#############################################################################################
+Pre_Tasks ()
+{
+print " " >> ${TIMING_LOG}
+print " Pre-Refresh for ${ORACLE_SID} Starting at `date`" >> ${TIMING_LOG}
+${SCRIPT_LOC}/automated_prerefresh ${ORACLE_SID} ${TABLE_LST} > ${PREREFRESH_LOG}
+print " Pre-Refresh for ${ORACLE_SID} Completed at `date`" >> ${TIMING_LOG}
+grep "AUTOMATED PREREFRESH TASKS COMPLETED FOR ${ORACLE_SID}" ${PREREFRESH_LOG}
+STATUS=$?
+ if [[ ${STATUS} -ne 0 ]]
+ then
+     print " Pre Refresh Did not run Successfully, check ${PREREFRESH_LOG} for more details."
+     exit 1
+ fi
+}
+#############################################################################################
+#Database_Clone
+#
+#############################################################################################
+Database_Clone ()
+{
+print " " >> ${TIMING_LOG}
+print " Active Clone for ${ORACLE_SID} Starting at `date`" >> ${TIMING_LOG}
+${SCRIPT_LOC}/automated_actclone SRC=${SRC_DB} TRG=${ORACLE_SID} SRC_TNS=${SRC_DB} TRG_TNS=${ORACLE_SID} > ${CLONETARGET_LOG}
+print " Active Clone for ${ORACLE_SID} Completed at `date`" >> ${TIMING_LOG}
+grep "ACTIVE CLONE FOR ${ORACLE_SID} COMPLETED" ${CLONETARGET_LOG}
+STATUS=$?
+if [[ ${STATUS} -ne 0 ]]
+ then
+     print " Active Cloning for ${ORCALE_SID} did not completed successfully, check ${CLONETARGET_LOG} for more details."
+     exit 1
+fi
+}
+#############################################################################################
+#Post_Tasks
+#
+#############################################################################################
+Post_Tasks ()
+{
+set -x
+print " " >> ${TIMING_LOG}
+print " Post Steps for ${ORACLE_SID} Starting at `date`" >> ${TIMING_LOG}
+${SCRIPT_LOC}/automated_postrefresh ${ORACLE_SID} post=${POST_STEPS} import=${TABLE_LST} > ${POST_MAIN_SQL_LOG1}
+print " Post Steps for ${ORACLE_SID} Completed at `date`" >> ${TIMING_LOG} 
+grep "POST REFRESH TASKS COMPLETED FOR ${ORACLE_SID}" ${POST_MAIN_SQL_LOG1}
+STATUS=$?
+if [[ ${STATUS} -ne 0 ]]
+ then
+     print " Post Refresh Steps ${ORCALE_SID} did not completed successfully, check ${POST_MAIN_SQL_LOG1} for more details."
+     exit 1
+fi
+}
+#############################################################################################
+#Backup_Oldfiles
+#
+#############################################################################################
+Backup_Oldfiles ()
+{
+LINE_CNT=`ls -ltr ${CUR_REF_DIR}|wc -l`
+if [[ ${LINE_CNT} -gt 2 ]]
+then
+    print "Backing up old refresh files to oldfiles_${TODAY}"
+    cd ${CUR_REF_DIR};mkdir oldfiles_${TODAY}
+    STATUS=$?
+if [[ ${STATUS} -ne 0 ]]
+then
+    Print "Change Directory to ${CUR_REF_DIR} Failed"
+    exit 1
+fi
+    mv *lst oldfiles_${TODAY}/
+    mv *sql oldfiles_${TODAY}/
+    mv *sh oldfiles_${TODAY}/
+    mv *par oldfiles_${TODAY}/
+    mv *dmp oldfiles_${TODAY}/
+    mv *log oldfiles_${TODAY}/
+    DIR_CNT=`ls -ld ${CUR_REF_DIR}/oldfiles*|wc -l`
+if [[ ${DIR_CNT} -gt 5 ]]
+then 
+    REM_DIR=`ls -ltdr ${CUR_REF_DIR}/oldfiles*|head -1|awk -F' ' '{print $9}'`
+    rm -r ${REM_DIR}
+fi
+fi
+}
+#############################################################################################
+#App_Pre_Tasks
+#
+#############################################################################################
+App_Pre_Tasks ()
+{
+print "APPLICATION PREREFRESH TASKS"
+}
+#############################################################################################
+#App_Post_Tasks
+#
+#############################################################################################
+App_Post_Tasks ()
+{
+print "APPLICATION POST TASKS"
+}
+#############################################################################################
+#Main
+#
+#############################################################################################
+PROGRAM_NAME=$0
+  if [ $# != 6 ]
+  then
+      USAGE="USAGE: ${PROGRAM_NAME} <SOURCE SID> <TARGET SID> <EXPORT/IMPORT_TABLE_LIST> POST=YES/NO <REFRESH DIR> APPS=Y/N"
+      print ${USAGE}
+      print ' '
+      exit 1
+  fi
+SRC_DB=$1
+ORACLE_SID=$2
+TABLE_LST=$3
+POST_STEPS=`echo $4|awk -F'=' '{print $2}'`
+REFRESH_DIR=$5
+OSUSR=`whoami`
+print "Script ${0} run by ${OSUSR}"
+Env_Src
+export CUR_REF_DIR=/u002/app/${OSUSR}/${REFRESH_DIR}
+cd ${CUR_REF_DIR}
+ STATUS=$?
+ if [[ ${STATUS} -ne 0 ]]
+ then
+     print " Mentioned Directory ${CUR_REF_DIR} not found, Please Provide Valid Directory to proceed with Refresh"
+     exit 1
+ fi
+ls -ltr ${CUR_REF_DIR}/${TABLE_LST}
+ STATUS=$?
+ if [[ ${STATUS} -ne 0 ]]
+ then
+     print " Export/Import file ${TABLE_LST} does not exist under ${CUR_REF_DIR}"
+     exit 1
+ fi
+SCRIPT_LOC=/u002/app/${OSUSR}/local/cordba/automated_rfscripts
+. ${SCRIPT_LOC}/DBA_GROUP.sh
+export TODAY=`date +%Y%m%d_%H%M`
+TIMING_LOG=${SCRIPT_LOC}/${ORACLE_SID}_Refresh_Timing_${TODAY}.log
+print " Refresh Starting for ${ORACLE_SID} at `date`" > ${TIMING_LOG}
+Backup_Oldfiles
+export PREREFRESH_LOG=${CUR_REF_DIR}/prerefresh_${ORACLE_SID}_${TODAY}.log
+export CLONETARGET_LOG=${CUR_REF_DIR}/clonetarget_${ORACLE_SID}_${TODAY}.log
+export POST_MAIN_SQL_LOG=${CUR_REF_DIR}/Post_${ORACLE_SID}_sqlop_${TODAY}.log
+export POST_MAIN_SQL_LOG1=${CUR_REF_DIR}/Post_${ORACLE_SID}_MAIN_${TODAY}.log
+export ACTIVE_CLONELOG=${CUR_REF_DIR}/${ORACLE_SID}_ACTIVECLONE_${TODAY}.log
+APP_TASKS=`echo $6|awk -F'=' '{print $2}'`
+if [[ ${APP_TASKS} == "Y" || ${APP_TASKS} == "y" ]]
+then
+App_Pre_Tasks
+fi
+Pre_Tasks
+Database_Clone
+Post_Tasks
+if [[ ${APP_TASKS} == "Y" || ${APP_TASKS} == "y" ]]
+then
+App_Post_Tasks
+fi
+print " " >> ${TIMING_LOG}
+print " Refresh Completed for ${ORACLE_SID} at `date`" >> ${TIMING_LOG}
+mailx -s "Refresh Completion Email for ${ORACLE_SID}" ${DBA_GROUPID} < ${TIMING_LOG}

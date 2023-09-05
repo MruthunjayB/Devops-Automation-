@@ -1,0 +1,951 @@
+#!/bin/ksh
+################################################################################################
+#PROGRAM        : PRE_REFRESH
+#
+#Purpose        : Performs the pre-refresh tasks for the Target ORACLE_SID which is under Refresh
+#                       
+#
+#Author         : Mruthunjay Belavatagi
+#
+################################################################################################
+############################################################################################
+#Chk_Ora_Err
+#
+#############################################################################################
+Chk_Ora_Err ()
+{
+  ERR_CNT=`grep ORA- ${ORA_ERR_CHK}|wc -l`
+  if [[ ${ERR_CNT} -ne 0 ]] 
+  then
+      print "ERROR: During ${TASK_NAME} Check ${ORA_ERR_CHK} for more details"
+      exit 1
+  fi  
+  cat /dev/null > ${ORA_ERR_CHK}
+}
+#############################################################################################
+#Db_Validity_Chk
+#
+#############################################################################################
+
+Db_Validity_Chk ()
+{
+  ps -ef|grep ${ORACLE_SID}|grep pmon
+  STATUS=$?
+  if [[ ${STATUS} -ne 0 ]]
+  then
+      print " Mentioned Database ${ORACLE_SID} not found, provide Valid Database name to proceed with pre refresh"
+      exit 1
+  fi
+}
+#############################################################################################
+#Get_Table_Export
+#
+#############################################################################################
+Get_Table_Export ()
+{
+  TASK_NAME=TABLE_EXPORT
+  for TAB in `cat ${CUR_REF_DIR}/${EXPORT_FILE}`
+  do
+    SCH_NAME=`echo ${TAB}|awk -F'.' '{print $1}'`
+    TAB_NAME=`echo ${TAB}|awk -F'.' '{print $2}'`
+    PARFILE=exp_${ORACLE_SID}_${TAB_NAME}.par
+    print "userid=\"/ as sysdba\" file=EXPORT_${ORACLE_SID}_${TAB_NAME}.dmp" > ${PARFILE}
+    print "log=EXPORT_${ORACLE_SID}_${TAB_NAME}.log ROWS=Y CONSTRAINTS=Y tables=${TAB}" >> ${PARFILE}
+    ${ORACLE_HOME}/bin/exp parfile=${PARFILE}
+    EXP_ERR_CHK=`grep "Export terminated successfully without warnings." EXPORT_${ORACLE_SID}_${TAB_NAME}.log`
+    STATUS=$?
+    if [[ ${STATUS} -ne 0 ]]
+    then
+        print "ERROR: During Table Export ${TAB} Check $EXPORT_${ORACLE_SID}_${TAB_NAME}.log for more details "
+        exit 1
+    fi 
+  done
+}
+
+#############################################################################################
+#Get_Table_Expdp
+#
+#############################################################################################
+Get_Table_Expdp ()
+{
+  TASK_NAME=TABLE_EXPDP
+sqlplus -s "/ as sysdba"<< EOF > ${ORA_ERR_CHK}
+CREATE OR REPLACE DIRECTORY ${ORACLE_SID}_${TODAY} as '${CUR_REF_DIR}'
+ /
+EXIT;
+EOF
+  Chk_Ora_Err
+  print "${TASK_NAME} starting at `date`"
+  SCH_NAME=`echo ${TAB}|awk -F'.' '{print $1}'`
+  TAB_NAME=`echo ${TAB}|awk -F'.' '{print $2}'`
+  PARFILE=${CUR_REF_DIR}/expdp_${ORACLE_SID}.par
+  print "userid=\"/ as sysdba\""                                            >  ${PARFILE}
+  print "directory=${ORACLE_SID}_${TODAY}"                                  >> ${PARFILE}
+  print "dumpfile=EXPDP_${ORACLE_SID}.dmp"                                  >> ${PARFILE}
+  print "logfile=EXPDP_${ORACLE_SID}.log"                                   >> ${PARFILE}
+  print "TABLES=(" >> ${PARFILE}
+  LINE_COUNT=`sed '/^$/d' ${EXPORT_FILE}|wc -l`
+  COUNT_LINES=1
+  for TAB in `cat ${EXPORT_FILE}`
+  do
+    if [[ "${COUNT_LINES}" -eq "${LINE_COUNT}" ]]
+    then
+        print ${TAB}                                                        >> ${PARFILE}          
+    else 
+        echo ${TAB}|sed 's/$/,/'                                            >> ${PARFILE}
+    fi
+  ((COUNT_LINES=COUNT_LINES+1))
+  done
+  print ")"                                                                 >> ${PARFILE} 
+  print "exclude=statistics"                                                >> ${PARFILE}
+  ${ORACLE_HOME}/bin/expdp parfile=${PARFILE}                               
+  grep "successfully completed" ${CUR_REF_DIR}/EXPDP_${ORACLE_SID}.log
+  STATUS=$?
+  if [[ ${STATUS} -ne 0 ]]
+  then
+      print "ERROR: During Table Export ${TAB} Check EXPDP_${ORACLE_SID}.log for more details "
+      exit 1
+  fi 
+  print "${TASK_NAME} Ending at `date`"
+  print "                             "
+}
+#############################################################################################
+# Get_Db_Link
+#
+#############################################################################################
+Get_Db_Link ()
+{
+  TASK_NAME=GET_DB_LINKS
+  print "Initiating ${TASK_NAME}"
+sqlplus -s "/ as sysdba" <<EOF > ${ORA_ERR_CHK}
+set serveroutput on format wrap
+set trimspool on
+set linesize 123
+set verify off feedback off pagesize 0 termout on
+select '****** Creating DATABASE LINKS build script ******' from dual;
+set termout off
+create table dl_temp (lineno NUMBER, grantor_owner varchar2(20),
+                    text VARCHAR2(800));
+
+DECLARE
+   CURSOR link_cursor IS select   u.name,
+                                  l.name,
+                                  l.userid,
+      l.password,
+                                  l.host
+     from     sys.link\$ l, sys.user\$ u
+                         where    l.owner# = u.user#
+                         order by l.name;
+   lv_owner    sys.user\$.name%TYPE;
+   lv_db_link  sys.link\$.name%TYPE;
+   lv_username sys.link\$.userid%TYPE;
+   lv_password sys.link\$.password%TYPE;
+   lv_host     sys.link\$.host%TYPE;
+   lv_string     VARCHAR2(800);
+   lv_user       VARCHAR2(255);
+   lv_connect VARCHAR2(255);
+   lv_text       VARCHAR2(800);
+
+   procedure write_out(p_string VARCHAR2) is
+   begin
+      insert into dl_temp (grantor_owner,text)
+                values (lv_owner,p_string);
+   end;
+
+BEGIN
+   OPEN link_cursor;
+   LOOP
+      FETCH link_cursor INTO lv_owner,
+                             lv_db_link,
+                             lv_username,
+lv_password,
+                             lv_host;
+      EXIT WHEN link_cursor%NOTFOUND;
+if (lv_owner = 'PUBLIC') then
+      lv_string := ('CREATE PUBLIC DATABASE LINK '||
+                lower(replace(lv_db_link,'.WORLD','')));
+else
+lv_string := ('CREATE DATABASE LINK '||
+                lower(replace(lv_db_link,'.WORLD','')));
+end if;
+      if (lv_username is not null) then
+         lv_user := ('CONNECT TO '||lower(lv_username)||
+                   ' IDENTIFIED BY '||lower(lv_password));
+      end if;
+      if (lv_host is not null) then
+lv_connect := ('USING '''||lv_host||''''||';');
+      end if;
+   lv_text := lv_string || ' ' || lv_user || ' ' || lv_connect;
+   write_out(lv_text);
+   lv_user := ' ';
+   lv_connect := ' ';
+   END LOOP;
+   CLOSE link_cursor;
+END;
+/
+
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_cre_DBLINK.lst
+break on downer skip 1
+col text format a60 word_wrap
+
+select   'connect ' || decode (grantor_owner, 'PUBLIC', 'SYS', grantor_owner)
+         || '/' downer,
+         text
+from     dl_temp
+order by downer
+/
+spool off
+
+drop table dl_temp;
+EXIT;
+EOF
+  Chk_Ora_Err
+  print "Completed ${TASK_NAME} at `date`"
+  print "                                "
+}
+#############################################################################################
+# Cre_Control_File 
+#
+#############################################################################################
+Cre_Control_File ()
+{
+  TASK_NAME=CREATE_CONTROLFILE
+  print "Creating Controlfile script for ${ORACLE_SID}"
+sqlplus -s "/ as sysdba" <<EOF > ${ORA_ERR_CHK}
+set heading off termout on
+select '****** Creating CREATE CONTROLFILE script ******' from dual;
+set termout off
+set serveroutput on
+set feed off
+set trimspool on
+set linesize 123
+spool ${CUR_REF_DIR}/cre_${ORACLE_SID}_controlfile.sql
+declare
+ ----------- Customize as you wish -------------------
+ --
+ -- Choose if this statement is intended for changing the database name:
+ ChangeDatabaseName boolean := true;
+ --
+ -- Fill in this value if you answered 'true' in previous question:
+ NewDatabaseName varchar2(30) := 'dbname';
+ --
+ -- Choose if the resetlogs option must be enabled:
+ Resetlogs boolean := true;
+
+ ----------- Do not modify below this point -----------
+ tmp_vble varchar2(255);
+ tmp_vble2 varchar2(255);
+ tmp_vble3 varchar2(255);
+ Stmt varchar2(4000);
+ MaxGroup number;
+ Bytes number;
+ Unit char(1);
+ MaxFile number;
+begin
+ dbms_output.enable(100000);
+ select name into tmp_vble from v\$database;
+ select log_mode into tmp_vble2 from v\$database;
+ if (Resetlogs) then
+   tmp_vble3 := 'RESETLOGS';
+ else
+   tmp_vble3 := 'NORESETLOGS';
+ end if;
+ if (NOT ChangeDatabaseName) then
+   dbms_output.put_line('CREATE CONTROLFILE REUSE DATABASE "'||tmp_vble||'" '||tmp_vble3||' '||tmp_vble2);
+ else
+-- dbms_output.put_line('CREATE CONTROLFILE REUSE SET DATABASE "'||NewDatabaseName||'" '||tmp_vble3||' '||tmp_vble2);
+dbms_output.put_line('CREATE CONTROLFILE REUSE SET DATABASE "'||tmp_vble||'" '||tmp_vble3||' '||tmp_vble2);
+ end if;
+ select records_total into tmp_vble from v\$controlfile_record_section where type = 'REDO LOG';
+  dbms_output.put_line('   MAXLOGFILES '   ||tmp_vble);
+ select dimlm into tmp_vble from sys.x\$kccdi;
+ dbms_output.put_line('   MAXLOGMEMBERS '   ||tmp_vble);
+ select records_total into tmp_vble from v\$controlfile_record_section where type = 'DATAFILE';
+ dbms_output.put_line('   MAXDATAFILES '   ||tmp_vble);
+ select records_total into tmp_vble from v\$controlfile_record_section where type = 'DATABASE';
+ dbms_output.put_line('   MAXINSTANCES '   ||tmp_vble);
+ select records_total into tmp_vble from v\$controlfile_record_section where type = 'LOG HISTORY';
+ dbms_output.put_line('   MAXLOGHISTORY '   ||tmp_vble);
+
+ dbms_output.put_line('LOGFILE');
+ select max(group#) into MaxGroup from v\$log;
+ for g_rec in (select group#, bytes from v\$log order by group#) loop
+  Bytes := g_rec.bytes;
+  Unit := '';
+  if (Bytes/1024 = trunc(Bytes/1024)) then
+    Bytes := Bytes / 1024;
+    Unit := 'K';
+    if (Bytes/1024 = trunc(Bytes/1024)) then
+      Bytes := Bytes / 1024;
+      Unit := 'M';
+    end if;
+  end if;
+  Stmt := '  GROUP '||g_rec.group#||' (';
+  for m_rec in (select member from v\$logfile where group# = g_rec.group#) loop
+    Stmt := Stmt || '''' || m_rec.member || ''',';
+  end loop;
+  if (g_rec.group# <> MaxGroup) then
+    Stmt := rtrim(Stmt,',')||') SIZE '||Bytes||Unit||',';
+  else
+    Stmt := rtrim(Stmt,',')||') SIZE '||Bytes||Unit;
+  end if;
+ dbms_output.put_line(Stmt);
+ end loop;
+
+ dbms_output.put_line('DATAFILE');
+ select max(file_id) into MaxFile
+   from dba_data_files d, dba_tablespaces t
+   where d.tablespace_name = t.tablespace_name
+   and t.status = 'ONLINE';
+ for d_rec in (select file_id, file_name
+                 from dba_data_files d, dba_tablespaces t
+                 where d.tablespace_name = t.tablespace_name
+                 and t.status = 'ONLINE'
+                 order by file_id) loop
+  if (d_rec.file_id <> MaxFile) then
+    dbms_output.put_line('  '''||d_rec.file_name||''',');
+  else
+    dbms_output.put_line('  '''||d_rec.file_name||'''');
+    end if;
+ end loop;
+
+ select value\$ into tmp_vble from props\$ where name = 'NLS_CHARACTERSET';
+ dbms_output.put_line('CHARACTER SET '||tmp_vble);
+ dbms_output.put_line(';');
+
+end;
+/
+
+spool off
+EXIT;
+EOF
+  Chk_Ora_Err
+  print "Completed ${TASK_NAME} at `date`"
+  print "                                "
+}
+#############################################################################################
+# Get_Db_Info 
+#
+#############################################################################################
+Get_Db_Info ()
+{
+  TASK_NAME=GET_DB_INFO
+  print "Initiating ${TASK_NAME} for ${ORACLE_SID}"
+sqlplus -s "/ as sysdba" <<EOF > ${ORA_ERR_CHK}
+col name format a80
+col value format a40
+col host format a20
+set linesize 123
+set feedback off
+set verify off pagesize 2222
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_DB_Info.lst
+
+select * from global_name;
+
+select INSTANCE_NAME,HOST_NAME,VERSION,STARTUP_TIME,STATUS  from v\$instance;
+
+select distinct status from v\$backup;
+
+select name, bytes/1024/1024 MB from v\$datafile order by 1;
+
+select distinct status FILE_STATUS from v\$datafile;
+
+alter database backup controlfile to trace;
+
+spool off;
+
+set heading on
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_DB_size.lst
+set linesize 123
+
+select count(*) TOTAL_FILES, sum(bytes/1024/1024/1024) DB_Size_in_GB from v\$datafile;
+
+spool off;
+
+set linesize 123
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_Arch_Seq.lst
+archive log list;
+spool off;
+
+set linesize 123
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_TOOLSREL.lst
+
+select toolsrel from psstatus;
+
+spool off;
+
+set pages 0;
+set feedback off;
+set linesize 123
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_dump_file_loc.lst
+select name, value from v\$parameter where name like '%background_dump_dest%';
+select name, value from v\$parameter where name like '%user_dump_dest%';
+set heading off feedback off
+set linesize 123
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_TEMP_files.lst
+
+select name, bytes/1024/1024 from v\$tempfile order by 1;
+spool off;
+
+set linesize 123 pagesize 222 heading on
+column username format a12
+column password format a18
+column db_link format a28
+column owner format a12
+column host format a12
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_dblinks_details.lst
+
+select a.username, b.password, a.db_link, a.owner, a.host, a.created
+from dba_db_links a, sys.link\$ b where a.host=b.host and a.db_link=b.name order by username;
+
+spool off
+EXIT;
+EOF
+  cat /dev/null > ${ORA_ERR_CHK}
+  print "Completed ${TASK_NAME} at `date`"
+  print "                                "
+}
+#############################################################################################
+# Get_Passwd_Info 
+#
+#############################################################################################
+Get_Passwd_Info ()
+{
+  TASK_NAME=GET_PASSWD_INFO
+  print "Initiating ${TASK_NAME} for ${ORACLE_SID}"
+sqlplus -s "/ as sysdba" <<EOF > ${ORA_ERR_CHK}
+set heading on ;
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_PATROL_pwd.lst
+select name, password from user\$ where name in ('PATROL','SYSADM','SYS','SYSTEM');
+spool off;
+
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_USRS_pwd_bkup.lst
+select name, password from user\$ where name not in ('PATROL','SYSADM','SYS','SYSTEM');
+spool off;
+
+
+set heading off feedback off verify off termout on
+select '****** Gathering USERS PASSWORDS details ******' from dual;
+set termout off serveroutput on
+set linesize 1000
+spool ${CUR_REF_DIR}/run_${ORACLE_SID}_restore_user_passwds.sql
+declare
+stmt varchar2(200);
+v_old_hash user\$.password%type;
+v_new_hash user\$.spare4%type;
+default_tablespace DBA_USERS.default_tablespace%type;
+temporary_tablespace DBA_USERS.temporary_tablespace%type;
+v_hash varchar2(200);
+begin
+for user_rec in (select a.password,a.spare4, a.name,b.default_tablespace,b.temporary_tablespace from user\$ a ,DBA_USERS b 
+where a.name=b.username and a.name not in ('SYS', 'SYSTEM', 'OUTLN', 'DBSNMP','PATROL')) loop
+v_old_hash := user_rec.password;
+v_new_hash := user_rec.spare4;
+if not ((v_old_hash is null) and (v_new_hash is null)) then
+if (v_new_hash is null) then
+if v_old_hash <> 'EXTERNAL' then
+v_hash := ''''||v_old_hash||'''';
+else
+goto end_loop;
+end if;
+end if;
+if (v_old_hash is null) then
+v_hash := ''''||v_new_hash||'''';
+end if;
+if ((v_old_hash is not null) and (v_new_hash is not null)) then
+v_hash := ''''||v_old_hash||';'||v_new_hash||'''';
+end if;
+stmt := 'Create User ' ||user_rec.name|| ' default tablespace '||user_rec.default_tablespace||chr(10)||'temporary tablespace '||
+user_rec.temporary_tablespace||'  Identified by values '||v_hash;
+end if;
+dbms_output.put_line(stmt||';');
+<<end_loop>>
+null;
+end loop;
+end;
+/
+
+declare
+stmt varchar2(200);
+v_old_hash user\$.password%type;
+v_new_hash user\$.spare4%type;
+default_tablespace DBA_USERS.default_tablespace%type;
+temporary_tablespace DBA_USERS.temporary_tablespace%type;
+v_hash varchar2(200);
+begin
+for user_rec in (select a.password,a.spare4, a.name,b.default_tablespace,b.temporary_tablespace from user\$ a ,DBA_USERS b 
+where a.name=b.username and a.name not in ('SYS', 'SYSTEM', 'OUTLN', 'DBSNMP','PATROL')) loop
+v_old_hash := user_rec.password;
+v_new_hash := user_rec.spare4;
+if not ((v_old_hash is null) and (v_new_hash is null)) then
+if (v_new_hash is null) then
+if v_old_hash <> 'EXTERNAL' then
+v_hash := ''''||v_old_hash||'''';
+else
+goto end_loop;
+end if;
+end if;
+if (v_old_hash is null) then
+v_hash := ''''||v_new_hash||'''';
+end if;
+if ((v_old_hash is not null) and (v_new_hash is not null)) then
+v_hash := ''''||v_old_hash||';'||v_new_hash||'''';
+end if;
+
+stmt := 'Alter User ' ||user_rec.name|| ' default tablespace '||user_rec.default_tablespace||chr(10)||'temporary tablespace '||
+user_rec.temporary_tablespace||'  Identified by values '||v_hash;
+
+end if;
+dbms_output.put_line(stmt||';');
+<<end_loop>>
+null;
+end loop;
+end;
+/
+spool off
+EXIT;
+EOF
+Chk_Ora_Err
+  print "Completed ${TASK_NAME} at `date`"
+  print "                                "
+}
+
+#############################################################################################
+# Get_Privs_Syn  
+#
+#############################################################################################
+Get_Privs_Syn ()
+{
+  TASK_NAME=GET_PRIVS_SYN
+  print "Initiating ${TASK_NAME} for ${ORACLE_SID}"
+sqlplus -s "/ as sysdba" <<EOF > ${ORA_ERR_CHK}
+set verify off feedback off pagesize 0 termout on
+select '****** Creating script to restore USERS ROLES ******' from dual;
+set termout off
+set linesize 123 pages 0
+spool ${CUR_REF_DIR}/run_${ORACLE_SID}_restore_user_roles.sql
+
+select 'grant ' || granted_role || ' to ' || grantee || decode (admin_option, 'YES', ' WITH ADMIN OPTION') || ';' from dba_role_privs
+where grantee not in ('SYS', 'SYSTEM', 'DBA', 'EXP_FULL_DATABASE', 'IMP_FULL_DATABASE','SELECT_CATALOG_ROLE') ;
+spool off
+
+set verify off feedback off pagesize 0 termout on
+select '****** Creating OBJECT PRIVILEGES script ******' from dual;
+set termout off
+set linesize 123
+
+spool ${CUR_REF_DIR}/run_${ORACLE_SID}_objects_priv.sql
+select 'grant '||PRIVILEGE||' on '||OWNER||'.'||TABLE_NAME||' to ' ||GRANTEE||' ; ' from DBA_TAB_PRIVS where grantee 
+not in ('SYS','SYSTEM', 'DBA', 'EXP_FULL_DATABASE', 'IMP_FULL_DATABASE','SELECT_CATALOG_ROLE');
+spool off
+
+set verify off feedback off pagesize 0 termout on
+select '****** Building CREATE TEMPFILES scripts ******' from dual;
+set termout off
+set linesize 123
+spool ${CUR_REF_DIR}/run_${ORACLE_SID}_cre_tempfiles.sql
+select 'alter tablespace ' || TABLESPACE_NAME || ' add tempfile ''' || FILE_NAME || ''' size ' || BYTES || ' reuse autoextend off ;'
+ from dba_temp_files ;
+spool off
+
+set heading off feedback off termout on
+select '****** Preparing POST REFRESH scripts ******' from dual;
+set termout off
+set linesize 123
+spool ${CUR_REF_DIR}/run_${ORACLE_SID}_UPDATE_psdbowner.sql
+select 'update psdbowner set dbname = '''|| DBNAME || ''' ;' from psdbowner ;
+spool off;
+
+set heading off
+set verify off feedback off pagesize 0 termout on
+select '****** Creating PUBLIC SYSNONYMS script ******' from dual;
+set termout off
+set linesize 123
+spool ${CUR_REF_DIR}/run_${ORACLE_SID}_cre_sysnoym.sql
+select 'CREATE '|| decode(owner,'PUBLIC','PUBLIC ',null) ||'SYNONYM ' || decode(owner,'PUBLIC',null, owner || '.') ||
+        lower(synonym_name) || ' FOR ' || lower(table_owner) ||'.' || lower(table_name) ||
+        decode(db_link,null,null,'@'||db_link) || ';'
+  from sys.dba_synonyms
+  where table_owner = (select OWNERID from psdbowner);
+
+spool off;
+set linesize 123
+set verify off feedback off pagesize 0 termout on
+select '****** To Check if DB access are intact after refresh..!!!******' from dual;
+set termout off
+set heading off feedback off
+
+spool ${CUR_REF_DIR}/system_privs_to_user.sql
+set pages 0
+select 'grant ' ||privilege  || ' to ' || grantee || ';' from dba_sys_privs order by grantee;
+spool off
+spool ${CUR_REF_DIR}/system_privs_to_role.sql
+set pages 0
+select 'grant  '  || privilege||   ' to '   ||role||';' from role_sys_privs order by role;
+spool off
+spool ${CUR_REF_DIR}/grant_roles.sql
+set pages 0
+select 'grant  '||  granted_ROLE  ||  ' to ' ||   grantee    ||';' from dba_role_privs order by grantee;
+spool off
+
+set linesize 123
+set verify off feedback off pagesize 0 termout on
+select '****** To Check if DB access are intact in 11g database refresh..!!!******' from dual;
+set termout off
+set heading off feedback off
+spool ${CUR_REF_DIR}/user_paswd_11g_db_i.sql
+SELECT name,password FROM SYS.USER$ WHERE password is not null;
+spool off
+spool ${CUR_REF_DIR}/user_paswd_11g_db_ii.sql
+SELECT name,spare4 FROM SYS.USER$ WHERE spare4 is not null;
+spool off
+
+set linesize 123
+set verify off feedback off pagesize 0 termout on
+select '****** Reset DB users to DEFAULT profile after refresh..!!!******' from dual;
+set termout off
+set heading off feedback off
+spool ${CUR_REF_DIR}/reset_user_to_default_profile.sql
+select 'alter user ' ||USERNAME|| '   PROFILE DEFAULT ;' from dba_users;
+spool off
+
+set verify off feedback off pagesize 0 termout on
+select '****** Creating script to DROP DATABASE ******' from dual;
+set termout off
+set heading off feedback off
+spool ${CUR_REF_DIR}/my_${ORACLE_SID}_destroy.sh
+set linesize 123
+
+select 'rm '||name     from v\$datafile;
+spool off;
+
+exit;
+EOF
+Chk_Ora_Err
+  print "Completed ${TASK_NAME} at `date`"
+  print "                                "
+}
+#############################################################################################
+# Get_Pre_Checks 
+#
+#############################################################################################
+Get_Pre_Checks ()
+{
+  PRE_CHECKS=${CUR_REF_DIR}/pre_checks_${ORACLE_SID}.log
+  TEMP_PRE_SCRIPT=${CUR_REF_DIR}/sql_check_temp1.log
+  TEMP_EXE_SCRIPT=${CUR_REF_DIR}/sql_check_temp2.sql
+
+  print "select name, log_mode from v\$database;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select name, log_mode from v\$database;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} > ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+
+  print "select sum(bytes)/(1024*1024*1024)"GB" from v\$datafile;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select sum(bytes)/(1024*1024*1024)"GB" from v\$datafile;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select count(*) from v\$datafile;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select count(*) from v\$datafile;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select distinct(substr(name,1,25))\"mount point\" from v\$datafile;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select distinct(substr(name,1,25))\"mount point\" from v\$datafile;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select name from v\$datafile order by name;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select name from v\$datafile order by name;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select count(*) from dba_db_links;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select count(*) from dba_db_links;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select  owner,db_link  from dba_db_links;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select  owner,db_link  from dba_db_links;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select count(*) from dba_users;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select count(*) from dba_users;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select username from dba_users order by username;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select username from dba_users order by username;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select count(*) from dba_sys_privs;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select count(*) from dba_sys_privs;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select grantee,privilege from dba_sys_privs order by grantee;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select grantee,privilege from dba_sys_privs order by grantee;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select count(*) from role_sys_privs;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select count(*) from role_sys_privs;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select role, privilege from role_sys_privs order by role;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select role, privilege from role_sys_privs order by role;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+
+  print "select count(*) from dba_role_privs;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select count(*) from dba_role_privs;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select grantee,granted_ROLE from dba_role_privs order by grantee;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "col grantee format a30;"  >> ${TEMP_EXE_SCRIPT}
+  print "select grantee,granted_ROLE from dba_role_privs order by grantee;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select username,default_tablespace,temporary_tablespace from dba_users order  by username;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select username,default_tablespace,temporary_tablespace from dba_users order  by username;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select * from psdbowner;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select * from psdbowner;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  cat /dev/null > ${TEMP_EXE_SCRIPT}
+  cat /dev/null > ${TEMP_PRE_SCRIPT}
+
+  print "select * from global_name;" > ${TEMP_PRE_SCRIPT}
+  print "set pages 1000 linesize 1000 term on echo on;" > ${TEMP_EXE_SCRIPT}
+  print "select * from global_name;" >> ${TEMP_EXE_SCRIPT}
+sqlplus -s " / as sysdba" <<EOF >>${TEMP_PRE_SCRIPT}
+@${TEMP_EXE_SCRIPT}
+exit;
+EOF
+  cat ${TEMP_PRE_SCRIPT} >> ${PRE_CHECKS}
+
+  print "                                       "  >> ${PRE_CHECKS}
+  rm ${TEMP_EXE_SCRIPT}
+  rm ${TEMP_PRE_SCRIPT}
+}
+#############################################################################################
+# Chk_Db_Ver
+#
+#############################################################################################
+Chk_Db_Ver ()
+{
+DB_VERSION=`sqlplus -s "/ as sysdba"<< EOF
+set feedback off pause off pagesize 0 heading off verify off linesize 500 term off
+select version from v\\\$instance
+/
+exit
+/
+EOF`
+  DB_VER=`echo ${DB_VERSION}|awk -F'.' '{print $1}'`
+  if [[ ${DB_VER} -eq 9 ]]
+  then
+      print "Since the database base Version is 9i release, normal Export would be performed"
+      print "                                                                               " 
+      Get_Table_Export
+  elif [[ ${DB_VER} -ge 10 ]]
+  then 
+      print "Since the database base version is 10g or higher, Datapump Export would be performed"
+      print "                                                                               "
+      Get_Table_Expdp
+  else
+      print "Could Not Get Version of the databse ${ORACLE_SID}"
+  fi
+}
+#############################################################################################
+#Main 
+#
+#############################################################################################
+PROGRAM_NAME=$0
+  if [ $# != 2 ]
+  then
+      USAGE="USAGE: ${PROGRAM_NAME} <TARGET_ORACLE_SID> <EXPORT_TABLE_LIST>"
+      print ${USAGE}
+      print ' '
+      exit 1
+  fi
+  ORACLE_SID=$1
+  OSUSR=`whoami`
+  EXPORT_FILE=${CUR_REF_DIR}/$2
+  ls -ltr ${EXPORT_FILE}
+  STATUS=$?
+  if [[ ${STATUS} -ne 0 ]]
+  then
+      print " Mentioned ${EXPORT_FILE} not found, provide Valid filename to proceed with pre refresh"
+      exit 1
+  fi
+  if [[ -s ${EXPORT_FILE} ]] 
+  then
+      print "Provided Arguments have been Validated, Proceeding with Pre-Refresh "
+  else
+      print " ${EXPORT_FILE} is empty, please enter valid Table Names to proceed with Pre-Refresh "
+      exit 1
+  fi
+  ORA_ERR_CHK=${CUR_REF_DIR}/ORA_ERR_CHK.log
+  Chk_Db_Ver
+  Get_Db_Link
+  Cre_Control_File
+  Get_Db_Info
+  Get_Passwd_Info
+  Get_Privs_Syn
+  Get_Pre_Checks
+  rm ${ORA_ERR_CHK}
+  print "                                "
+  print "AUTOMATED PREREFRESH TASKS COMPLETED FOR ${ORACLE_SID} at `date`"
