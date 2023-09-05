@@ -1,0 +1,22 @@
+- name: Start-NTP
+  win_service:
+    name: w32time
+    state: started
+  notify: Validate-NTP-Start
+
+- name: Validate-NTP-Start
+  win_command: sc query w32time
+  register: ntpstartstatus
+  until: ntpstartstatus.stdout is search('RUNNING')
+  retries: 10
+  delay: 3
+  notify: Update-NTP-CONFIG
+
+- name: Update-NTP-CONFIG
+  win_shell: |
+     w32tm /config /update
+  when: ntpstartstatus.stdout is search('RUNNING')
+  notify: Set-Service-to-Automatic
+
+- name: Set-Service-to-Automatic
+  win_command: sc config w32time start= auto

@@ -1,0 +1,6 @@
+---
+- name: Configure Jumboframe
+  hosts: all
+  gather_facts: no
+  roles:
+     - jumboframe

@@ -1,0 +1,5 @@
+---
+# vars file for ntp-mb
+
+#- include_vars: set_linux_vars.yml
+#  when: (ansible_facts['distribution'] == "RedHat")

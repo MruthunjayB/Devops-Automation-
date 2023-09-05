@@ -1,0 +1,13 @@
+---
+- name: Notify-Mtu-Change
+  win_shell:
+    powershell -command "(Get-NetAdapterAdvancedProperty '{{ GetInterface }}' | findstr /c:'Jumbo Packet')"
+  register: newmtu
+  when: filterout.stdout is not search(displayValue) and firstdisplay.stderr != ""
+  notify: Validate-Mtu-Change
+
+
+- name: Validate-Mtu-Change
+  debug:
+    msg: "MTU updated successfully."
+  when: newmtu.stdout is search(displayValue) or newmtu.stdout is search(displayValue2)

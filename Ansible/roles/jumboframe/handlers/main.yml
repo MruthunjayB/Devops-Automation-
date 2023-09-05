@@ -1,0 +1,16 @@
+---
+# handlers file for jumboframe
+#- name: handler1
+#  shell:
+#    cmd: cat {{ network_config_dir }}/ifcfg-{{ ethvalues }}|grep {{ element.ipConfig.ip }}
+#"this would be for {{ network_config_dir }}/ifcfg-{{ ethvalues }} and {{ element.ipConfig.ip }}"
+
+
+- name: lin_handlers
+  import_tasks: jumbo-lin-handlers.yml
+  when: ansible_os_family == "RedHat"
+
+
+- name: win_handlres
+  import_tasks: jumbo-win-handlers.yml
+  when: ansible_os_family == "Windows"

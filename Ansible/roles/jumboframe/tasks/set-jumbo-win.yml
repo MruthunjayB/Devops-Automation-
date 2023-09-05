@@ -1,0 +1,26 @@
+---
+- name: Set-Variable-For-Windows-File
+  set_fact:
+    outfile: C:\users\cmschef\ip.txt
+
+
+- name: Get-Ip-List
+  win_shell:
+    powershell -command "Get-NetIPConfiguration | Out-File {{ outfile }}"
+  register: opt
+
+- name: Get interface IP and MTU size
+  set_fact:
+    interfaceIP: "{{ element.ipConfig.ip }}"
+    interfaceMTU: "{{ element.ipConfig.mtuSize }}"
+  loop: "{{ cmsng.networkInterfaces }}"
+  vars:
+    element: "{{ item }}"
+  register: interface_facts
+
+
+- name: Get-IP-Mtu
+  include_tasks: set-jumbo-win-tasks.yml
+  loop: "{{ interface_facts.results }}"
+  loop_control:
+    loop_var: lpvr1

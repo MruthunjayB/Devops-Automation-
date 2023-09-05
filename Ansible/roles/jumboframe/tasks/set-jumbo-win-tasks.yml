@@ -1,0 +1,77 @@
+- assert:
+    that: "'{{ lpvr1.ansible_facts.interfaceMTU }}' == '1500' or '{{ lpvr1.ansible_facts.interfaceMTU }}' == '9000'"
+    fail_msg: "ERROR!! On Windows VM, MTU values can only be either 1500 or 9000, but received {{ lpvr1.ansible_facts.interfaceMTU }} for {{ lpvr1.ansible_facts.interfaceIP }} from the payload."
+
+
+- name: IP-Check
+  debug:
+    msg: "MTU Check for ip {{ lpvr1.ansible_facts.interfaceIP }}"
+
+
+- name: Get-Interface-Tmp
+  win_shell: |
+    powershell -command "((Get-Content C:\users\cmschef\ip.txt| Select-String -Pattern {{ lpvr1.ansible_facts.interfaceIP }} -Context 4|findstr InterfaceAlias).Split(': ')| findstr Ethernet)"
+  register: GetInterfaceTmp
+
+
+- name: Get-Interface-Tmp
+  debug:
+    msg: "{{ GetInterfaceTmp.stdout_lines[0] }}"
+
+
+- name: Get-Interface
+  set_fact:
+    GetInterface: "{{ GetInterfaceTmp.stdout_lines[0] }}"
+
+
+- name: Test-Debug
+  debug:
+    msg: "{{ GetInterface }}"
+
+
+- name: Get-Mtu
+  debug:
+    msg: "{{ lpvr1.ansible_facts.interfaceMTU }}"
+  register: MTUOUT
+
+
+- name: Set-Display-1500
+  set_fact:
+    displayValue: "1514"
+    displayValue2: "Standard 1500"
+  when: lpvr1.ansible_facts.interfaceMTU == "1500"
+
+
+- name: Set-Diplay-9000
+  set_fact:
+    displayValue: "9014"
+    displayValue2: "9014 Bytes"
+  when: lpvr1.ansible_facts.interfaceMTU == "9000"
+
+
+- name: Debug-Display
+  debug:
+    msg:
+       "Display Value 1: {{ displayValue }} & Display Value 2: {{ displayValue2 }}"
+
+
+- name: Filter-msg
+  win_shell: |
+    powershell -command "(Get-NetAdapterAdvancedProperty '{{ GetInterface }}' | findstr /c:'Jumbo Packet')"
+  register: filterout
+
+
+- name: Set-Mtu-Displayvalue
+  win_shell: |
+    powershell -command "(Set-NetAdapterAdvancedProperty '{{ GetInterface }}' -DisplayName 'Jumbo Packet' -DisplayValue '{{ displayValue }}')"
+  register: firstdisplay
+  when: filterout.stdout is not search(displayValue)
+  notify: Notify-Mtu-Change
+
+
+- name: Set-Mtu-Displayvalue2
+  win_shell: |
+      powershell -command "(Set-NetAdapterAdvancedProperty '{{ GetInterface }}' -DisplayName 'Jumbo Packet' -DisplayValue '{{ displayValue2 }}')"
+  ignore_unreachable: true
+  when: filterout.stdout is not search(displayValue) and firstdisplay.stderr != ""
+  notify: Notify-Mtu-Change

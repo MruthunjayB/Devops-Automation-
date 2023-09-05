@@ -1,0 +1,3 @@
+srvc_type: "{{ 'chrony' if ansible_facts['distribution_major_version'] >= '8' else 'ntp' }}"
+rc_content: "{{ 'chronyd' if ansible_facts['distribution_major_version'] >= '8' else 'ntpd' }}"
+conf_file: "{{ '/etc/chrony.conf' if ansible_facts['distribution_major_version'] >= '8' else '/etc/ntp.conf' }}"

@@ -1,0 +1,31 @@
+
+- include_vars: set_win_vars.yml
+
+- name: Set NTP Service to Manual
+  win_command: sc config w32time start= demand
+
+- name: STOP  NTP Stopped
+  win_service:
+    name: w32time
+    state: stopped
+
+
+- name: check if NTP stopped
+  win_command: sc query w32time
+  register: ntpstopstatus
+  until: ntpstopstatus.stdout is search('STOPPED')
+  retries: 10
+  delay: 3
+
+- name: Setting only Primary NTP
+  win_shell: |
+      w32tm /config /manualpeerlist:"{{ cmsng.ntpserver.primary }}" /syncfromflags:MANUAL
+  when: ((cmsng.ntpserver.secondary is undefined) or (cmsng.ntpserver.secondary|length == 0 )) and ntpstopstatus.stdout is search('STOPPED')
+  notify: Start-NTP
+
+- name: Setting Primary and Secondary NTP
+  win_shell: |
+      w32tm /config /manualpeerlist:'"'"{{ cmsng.ntpserver.primary }}" "{{ cmsng.ntpserver.secondary }}"'"' /syncfromflags:MANUAL
+  when: (cmsng.ntpserver.secondary is defined) and ntpstopstatus.stdout is search('STOPPED')
+  notify: Start-NTP
+  

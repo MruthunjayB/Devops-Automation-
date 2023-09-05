@@ -1,0 +1,11 @@
+---
+# handlers file for ntp-mb
+
+- name: lin_handlers
+  import_tasks: lin_handlers.yml
+  when: ansible_os_family == "RedHat"
+
+- name: win_handlers
+  import_tasks: win_handlers.yml
+  when: ansible_os_family == "Windows"
+  

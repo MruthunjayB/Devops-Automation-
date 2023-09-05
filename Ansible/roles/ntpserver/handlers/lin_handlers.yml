@@ -1,0 +1,28 @@
+- name: restart-chrony-service
+  service:
+    name: chronyd
+    enabled: yes
+    state: restarted
+  notify: disable-ntp
+
+- name: restart-ntp-service
+  become: yes
+  service:
+    name: ntpd
+    enabled: yes
+    state: restarted
+  notify: disable-chrony
+
+- name: disable-chrony
+  service:
+    name: chronyd
+    enabled: no
+    state: stopped
+  ignore_errors: true
+
+- name: disable-ntp
+  service:
+    name: ntpd
+    enabled: no
+    state: stopped
+  ignore_errors: true

@@ -1,0 +1,67 @@
+- name: IP-Check
+  debug:
+    msg: "MTU Check for ip {{ lpvr1.ansible_facts.interfaceIP }}"
+
+- name: IP-Existence-Check 
+  shell: 
+    cmd: "grep {{ lpvr1.ansible_facts.interfaceIP }} {{ network_config_dir }}/ifcfg-eth* |wc -l "
+  register: regipexchk
+
+  
+- name: Validate-Provided-IP-Exists-Infile
+  fail:
+    msg: "One Search is expected for provided ip {{ lpvr1.ansible_facts.interfaceIP }} Under {{ network_config_dir }}"
+  when: regipexchk.stdout != "1"
+
+ 
+- name: File-With-Ip
+  shell:
+    cmd: "grep {{ lpvr1.ansible_facts.interfaceIP }} {{ network_config_dir }}/ifcfg-eth*|awk -F':' '{print $1}'"
+  register: filewithip
+
+- name: Debug
+  debug:
+    msg: "{{ filewithip.stdout }}"
+
+
+- name: Check-Mtu-Size
+  shell:
+    cmd: "grep MTU= {{ filewithip.stdout }}|wc -l"
+  register: mtucount
+
+
+- name: Get-RHEL-Rel
+  set_fact:
+    relv: "{{ ansible_distribution_major_version }}"
+
+
+#- name: Backup-Nw-File
+#  shell:
+#    cmd: cp -p "{{ filewithip.stdout }}" "{{ filewithip.stdout }}"-bkp
+#  when: mtucount.stdout == "1"
+
+
+- name: Update-Mtu
+  lineinfile:
+    path: "{{ filewithip.stdout }}"
+    regexp: '^MTU=' 
+    line: 'MTU={{ lpvr1.ansible_facts.interfaceMTU }}'
+    backup: yes
+  when: mtucount.stdout == "1"
+  notify: Restart-RHEL{{ relv }}-NW-Service
+
+  
+- name: Insert-Mtu
+  lineinfile:
+    path: "{{ filewithip.stdout }}"
+    insertafter: 'IPADDR=.*$'
+    line: 'MTU={{ lpvr1.ansible_facts.interfaceMTU }}'
+    backup: yes
+  when: mtucount.stdout == "0"
+  notify: Restart-RHEL{{ relv }}-NW-Service
+
+
+- name: Delete-Backup
+  shell:
+     cmd: "rm -f {{ filewithip.stdout }}.*"
+  ignore_errors: true 

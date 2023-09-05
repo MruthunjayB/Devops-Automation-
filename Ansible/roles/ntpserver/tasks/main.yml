@@ -1,0 +1,31 @@
+---
+# tasks file for ntp-mb
+- name: Gathering facts
+  setup:
+
+- name: "Set Variables for Windows."
+  include_vars: set_win_vars.yml
+  when: ansible_os_family == "Windows"
+
+- name: "Set Variables for Linux."
+  include_vars: set_linux_vars.yml
+  when: (ansible_os_family == "RedHat")
+
+- name: "Validate if cmsng.ntpserver.primary is not null or undefined"
+  fail: msg="Variable cmsng.ntpserver.primary is not set."
+  when: ( cmsng.ntpserver.primary  is not defined) or ( cmsng.ntpserver.primary |length == 0)
+
+- name: "Validate if cmsng.ntpserver.secondary is not null"
+  fail: msg="Variable cmsng.ntpserver.secondary is not set."
+  when: ((cmsng.ntpserver.secondary is defined) and (cmsng.ntpserver.secondary|length == 0)) and (ansible_os_family == "RedHat")
+
+- name: "Validate if cmsng.ntpserver.secondary is not null"
+  fail: msg="Variable cmsng.ntpserver.secondary is not set."
+  when: ((cmsng.ntpserver.secondary is defined) and (cmsng.ntpserver.secondary|length == 0)) and (ansible_os_family == "Windows")
+
+- include_tasks: set_ntp_linux.yml
+  when: (ansible_os_family == "RedHat")
+
+- include_tasks: set_ntp_win.yml
+  when: ansible_os_family == "Windows"
+  

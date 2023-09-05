@@ -1,0 +1,8 @@
+---
+- name: Configure NTP
+  hosts: all
+  gather_facts: no
+  roles:
+     - ntpserver
+     
+     

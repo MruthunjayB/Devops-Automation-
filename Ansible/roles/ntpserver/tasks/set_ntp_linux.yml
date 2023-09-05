@@ -1,0 +1,43 @@
+#- include_vars: set_linux_vars.yml
+- name: create rc file
+  file:
+    path: /etc/rc.conf
+    state: touch
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Update rc.conf for RHEL
+  lineinfile:
+    path: /etc/rc.conf
+    line: ' {{rc_content}}_enable="YES"'
+    state: present
+
+- name: create configuration file chrony.conf for RHEL 8 or ntp.conf for RHEL 7
+  file:
+    path: '{{ conf_file }}'
+    state: touch
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Adding primary and secondary ntp servers to configuration file /etc/chrony.conf for RHEL 8 or /etc/ntp.conf for RHEL 7
+  blockinfile:
+    path: '{{ conf_file }}'
+    block: |
+      server {{ cmsng.ntpserver.primary }}
+      server {{ cmsng.ntpserver.secondary }}
+    state: present
+  when: cmsng.ntpserver.secondary is defined
+  notify:
+    - restart-{{ srvc_type }}-service
+
+- name: Adding only primary servers to configuration file /etc/chrony.conf for RHEL 8 or /etc/ntp.conf for RHEL 7
+  blockinfile:
+    path: '{{ conf_file }}'
+    block: |
+      server {{ cmsng.ntpserver.primary }}
+    state: present
+  when: cmsng.ntpserver.secondary is undefined
+  notify:
+    - restart-{{ srvc_type }}-service

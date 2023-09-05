@@ -1,0 +1,36 @@
+---
+# tasks file for jumboframe
+#- vars: 
+#     val-ipconfig-exists
+- name: Gathering-Facts
+  setup:
+
+
+- name: Inlcude-Win-Vars
+  include_vars: set_win_vars.yml
+  when: ansible_os_family == "Windows"
+
+
+- name: Get-Ver
+  debug:
+    msg: "{{ os_ver_chk }}"
+  when: ansible_os_family == "Windows"
+
+#Although in chef cookbook this check is performed from Windows 8, releases lower than Windows 12 is out of scope these days. Hence including the checks only for Win 12 and Higher
+
+- name: Windows-Version-Check 
+  fail: msg="Play Book not intented to run on Windows Versions lower than 12."
+  when: ((ansible_os_family == "Windows" and os_ver_chk|int  < 2012 ))
+
+
+- name: Include-Chk-Task
+  include_tasks: chk-tasks.yml
+
+- name: Include-Tasks-For-Redhat-set-jumbo-linux.yml
+  include_tasks: set-jumbo-linux.yml
+  when: (ansible_os_family == "RedHat")
+
+
+- name: Include-Tasks-For-Windows-set-jumbo-win.yml
+  include_tasks: set-jumbo-win.yml
+  when: ((ansible_os_family == "Windows" and os_ver_chk|int >= 2012 ))

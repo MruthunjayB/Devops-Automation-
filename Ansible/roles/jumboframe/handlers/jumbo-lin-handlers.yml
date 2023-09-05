@@ -1,0 +1,10 @@
+- name: Restart-RHEL8-NW-Service
+  service:
+    name: NetworkManager.service
+    state: restarted
+
+
+- name: Restart-RHEL7-NW-Service 
+  service:
+    name: network
+    state: restarted
