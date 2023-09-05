@@ -1,11 +1,11 @@
-- name: Check-cmsng-networkInterfaces
-  fail: msg="cmsng:networkInterfaces is not set"
-  when: cmsng.networkInterfaces is undefined
+- name: Check-networkInterfaces
+  fail: msg="networkInterfaces is not set"
+  when: networkInterfaces is undefined
 
 
 - name: Iterate-Array
   debug:
-    msg: "{{ cmsng.networkInterfaces[0] }}"
+    msg: "{{ networkInterfaces[0] }}"
   register: valipconfigexists
 
 
@@ -17,19 +17,19 @@
 - name: Validate-Ip-Is-Defined
   fail: msg="Undefined Attribute for ip {{ item }}"
   when: item.ipConfig.ip is undefined
-  loop: "{{ cmsng.networkInterfaces }}"
+  loop: "{{ networkInterfaces }}"
 
 
 - name: Validate-Ip-Is-Not-Null
   fail: msg="Null Value defined for ip {{ item }}"
   when: item.ipConfig.ip|length == 0
-  loop: "{{ cmsng.networkInterfaces }}"
+  loop: "{{ networkInterfaces }}"
 
 
 - name: Validate-Mtu-Is-Defined
   fail: msg="Undefined Attribute for mtu {{ item }}"
   when: item.ipConfig.mtuSize is undefined
-  loop: "{{ cmsng.networkInterfaces }}"
+  loop: "{{ networkInterfaces }}"
 
 
 - name: Validate-Mtu-Is-Not-Null
@@ -38,4 +38,4 @@
        - "{{ item.ipConfig.mtuSize | int }}"
     fail_msg: "{{ item.ipConfig.mtuSize }} must be integer"
     success_msg: "{{ item.ipConfig.mtuSize | int }}"
-  loop: "{{ cmsng.networkInterfaces }}"
+  loop: "{{ networkInterfaces }}"
