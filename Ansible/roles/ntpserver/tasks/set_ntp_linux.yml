@@ -25,10 +25,10 @@
   blockinfile:
     path: '{{ conf_file }}'
     block: |
-      server {{ cmsng.ntpserver.primary }}
-      server {{ cmsng.ntpserver.secondary }}
+      server {{ ntpserver.primary }}
+      server {{ ntpserver.secondary }}
     state: present
-  when: cmsng.ntpserver.secondary is defined
+  when: ntpserver.secondary is defined
   notify:
     - restart-{{ srvc_type }}-service
 
@@ -36,8 +36,8 @@
   blockinfile:
     path: '{{ conf_file }}'
     block: |
-      server {{ cmsng.ntpserver.primary }}
+      server {{ ntpserver.primary }}
     state: present
-  when: cmsng.ntpserver.secondary is undefined
+  when: ntpserver.secondary is undefined
   notify:
     - restart-{{ srvc_type }}-service
