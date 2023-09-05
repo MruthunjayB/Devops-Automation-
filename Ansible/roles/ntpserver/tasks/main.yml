@@ -11,17 +11,17 @@
   include_vars: set_linux_vars.yml
   when: (ansible_os_family == "RedHat")
 
-- name: "Validate if cmsng.ntpserver.primary is not null or undefined"
-  fail: msg="Variable cmsng.ntpserver.primary is not set."
-  when: ( cmsng.ntpserver.primary  is not defined) or ( cmsng.ntpserver.primary |length == 0)
+- name: "Validate if ntpserver.primary is not null or undefined"
+  fail: msg="Variable ntpserver.primary is not set."
+  when: ( ntpserver.primary  is not defined) or ( ntpserver.primary |length == 0)
 
-- name: "Validate if cmsng.ntpserver.secondary is not null"
-  fail: msg="Variable cmsng.ntpserver.secondary is not set."
-  when: ((cmsng.ntpserver.secondary is defined) and (cmsng.ntpserver.secondary|length == 0)) and (ansible_os_family == "RedHat")
+- name: "Validate if ntpserver.secondary is not null"
+  fail: msg="Variable ntpserver.secondary is not set."
+  when: ((ntpserver.secondary is defined) and (ntpserver.secondary|length == 0)) and (ansible_os_family == "RedHat")
 
-- name: "Validate if cmsng.ntpserver.secondary is not null"
-  fail: msg="Variable cmsng.ntpserver.secondary is not set."
-  when: ((cmsng.ntpserver.secondary is defined) and (cmsng.ntpserver.secondary|length == 0)) and (ansible_os_family == "Windows")
+- name: "Validate if ntpserver.secondary is not null"
+  fail: msg="Variable ntpserver.secondary is not set."
+  when: ((ntpserver.secondary is defined) and (ntpserver.secondary|length == 0)) and (ansible_os_family == "Windows")
 
 - include_tasks: set_ntp_linux.yml
   when: (ansible_os_family == "RedHat")
